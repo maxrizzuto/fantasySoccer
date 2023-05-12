@@ -100,7 +100,18 @@ def get_match_data(df):
     return gw_df
 
 
-df = get_dataframe(
-    'https://fbref.com/en/comps/9/schedule/Premier-League-Scores-and-Fixtures', gw=3)
-gw_df = get_match_data(df)
-print(gw_df)
+def export_data(url, gw):
+
+    df = get_match_data(get_dataframe(url, gw=gw))
+    df['gw'] = gw
+
+    # move gw column to first column
+    cols = df.columns.tolist()
+    cols = cols[-1:] + cols[:-1]
+    df = df[cols]
+
+    df.to_csv('data/temp_data.csv', index=False)
+
+
+export_data(
+    'https://fbref.com/en/comps/9/schedule/Premier-League-Scores-and-Fixtures', 3)
