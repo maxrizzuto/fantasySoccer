@@ -110,8 +110,16 @@ def export_data(url, gw):
     cols = cols[-1:] + cols[:-1]
     df = df[cols]
 
+    # rename columns to be sql-friendly
+    cols = df.columns.tolist()
+    cols = [sub.replace('#', 'Num').replace('Int', 'Interceptions').replace(
+        '%', 'Pct').replace('1/3', 'Passes_Final_Third').replace('2', 'Second').replace('Out', 'Outswinging').replace('Off', 'Pass_Offside').replace('+', 'And')
+        .replace(' ', '_') if sub != 'In' else 'Inswinging' for sub in cols]
+    df.columns = cols
+
+    # export to csv
     df.to_csv('data/temp_data.csv', index=False)
 
 
 export_data(
-    'https://fbref.com/en/comps/9/schedule/Premier-League-Scores-and-Fixtures', 3)
+    'https://fbref.com/en/comps/9/schedule/Premier-League-Scores-and-Fixtures', 4)
