@@ -39,6 +39,9 @@ def clean_columns(df):
     if df['Player'].str.contains('Players').any():
         df = df[:-1]
 
+    # if second value in player tuple is none remove the row from the dataframe
+    df = df[df['Player'].map(lambda x: x[1] is not None)]
+
     # extract player id from player column
     if isinstance(df['Player'].iloc[0], tuple):
         df['playerID'] = df['Player'].map(lambda x: x[1].split('/')[-2])
@@ -106,7 +109,7 @@ def get_match_data(url, gw, export=False):
         # add teams to df
         teams = [x.find('a').text for x in soup.find_all('strong') if x.find(
             'a') and '/en/squads/' in x.find('a')['href']]
-        print(f'GW {gw}: Retrieving data for {teams[0]} vs {teams[1]}')
+        print(f'GW {gw}: Retrieving data for {teams[0]} vs. {teams[1]}')
         team_a = df_lst[:len(df_lst)//2]
         team_b = df_lst[len(df_lst)//2:]
         for x in team_a:
@@ -140,7 +143,7 @@ def get_match_data(url, gw, export=False):
 
         # add match_df to gw_df
         gw_df = pd.concat([gw_df, match_df], ignore_index=True)
-        print('Data retrieved successfully\n--------------------------')
+        print('Done.\n--------------------------')
 
         # sleep for 5 seconds to avoid getting blocked
         time.sleep(5)
@@ -182,14 +185,17 @@ def get_player_data(url):
     # get data for each team
     for team in team_urls:
         team_name = ' '.join(team.split('/')[-1].split('-')[:-1])
-        print(f'Getting data for {team_name}...')
-        df = pd.read_html(team)[0]
-        df.columns = df.columns.droplevel()
+        print(f'Retrieving data for {team_name}...')
+        df = pd.read_html(team, extract_links='all')[0]
+        df.columns = [x[-1][0] for x in df.columns]
         df = df.T.groupby(level=0).first().T
         df['Club'] = team_name
 
+        # get player_id column
+        df = clean_columns(df)
+
         # move player, nation, pos, age, mp, starts, and mins to first columns
-        cols = ['Player', 'Club', 'Nation',
+        cols = ['Player', 'playerID', 'Club', 'Nation',
                 'Pos', 'Age', 'MP', 'Starts', 'Min']
         cols = cols[::-1]
 
@@ -198,17 +204,26 @@ def get_player_data(url):
         df = df.drop(columns='Matches')
         df = df.fillna(0)
 
-        # move each col to front of df
+        # move each col to front of df, remove unnecessary columns
         for col in cols:
             df_cols = df.columns.tolist()
             df_cols.insert(0, df_cols.pop(df_cols.index(col)))
-            df = df[df_cols]
+        df = df[cols[::-1]]
 
-        print(df)
-        print('Done.')
+        # convert to numeric columns where possible
+        df = df.apply(pd.to_numeric, errors='ignore')
+
+        # confirm data was retrieved
+        print('Done.\n--------------------------')
 
         # add df to player_df
         player_df = pd.concat([player_df, df], ignore_index=True)
+
+        # sleep for 3 seconds to avoid getting blocked
+        time.sleep(3)
+
+    # change all columns in dataframe to numeric where possible
+    player_df = player_df.apply(pd.to_numeric, errors='ignore')
 
     return player_df
 
