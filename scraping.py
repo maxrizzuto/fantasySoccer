@@ -81,6 +81,11 @@ def get_match_data(url, gw, export=False):
     # get dataframe from url
     df = get_dataframe(url, gw=gw)
 
+    # drop postponed matches or matches with no score listed
+    df.Score.replace('', np.nan, inplace=True)
+    df.dropna(subset=['Score'], inplace=True)
+    print(df)
+
     # get link from each match in dataframe
     matches = [f'https://fbref.com{x}' for x in df.Score.map(lambda x: x[1])]
 
@@ -145,8 +150,8 @@ def get_match_data(url, gw, export=False):
         gw_df = pd.concat([gw_df, match_df], ignore_index=True)
         print('Done.\n--------------------------')
 
-        # sleep for 5 seconds to avoid getting blocked
-        time.sleep(5)
+        # sleep for 7 seconds to avoid getting blocked
+        time.sleep(7)
 
     # convert to numeric values
     gw_df = gw_df.apply(pd.to_numeric, errors='ignore')
@@ -167,7 +172,7 @@ def get_match_data(url, gw, export=False):
 
     # export if specified
     if export:
-        gw_df.to_csv(f'/data/match_data/gw{gw}.csv', index=False)
+        gw_df.to_csv(f'data/match_data/gw{gw}.csv', index=False)
 
     return gw_df
 
@@ -219,8 +224,8 @@ def get_player_data(url):
         # add df to player_df
         player_df = pd.concat([player_df, df], ignore_index=True)
 
-        # sleep for 3 seconds to avoid getting blocked
-        time.sleep(3)
+        # sleep for 7 seconds to avoid getting blocked
+        time.sleep(7)
 
     # change all columns in dataframe to numeric where possible
     player_df = player_df.apply(pd.to_numeric, errors='ignore')
@@ -229,5 +234,5 @@ def get_player_data(url):
 
 
 if __name__ == '__main__':
-    get_player_data(PL_URLS['players'])
-    # get_match_data(PL_URLS['matches'], 1)
+    # get_player_data(PL_URLS['players'])
+    get_match_data(PL_URLS['matches'], 1, export=True)

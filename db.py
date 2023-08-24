@@ -48,13 +48,16 @@ def create_player_game_table(conn, gw):
     match_cols = sql_cols(match_df)
     with conn.cursor() as cursor:
         player_game = 'CREATE TABLE IF NOT EXISTS player_game ({}'.format(
-            ', '.join([' '.join(x) for x in match_cols])) + ', PRIMARY KEY (playerID), CONSTRAINT player_fk FOREIGN KEY (playerID) REFERENCES player(playerID));'
-        # PRIMARY KEY (playerID, gw, Club),
+            ', '.join([' '.join(x) for x in match_cols])) + ', PRIMARY KEY (playerID), CONSTRAINT player_game_fk FOREIGN KEY (playerID) REFERENCES player(playerID));'
         cursor.execute(player_game)
     conn.commit()
 
     # insert data from csv into sql
     cols = match_df.columns
+
+    # create player_stats table if it doesn't exist
+    create_player_stats_table(conn, cols)
+
     with conn.cursor() as cursor:
 
         # insert data from dataframe into sql
@@ -69,7 +72,7 @@ def create_player_game_table(conn, gw):
                 continue
         conn.commit()
 
-    print("Imported into player_game\n", '-----------------')
+    print('Imported into player_game\n-----------------')
 
 
 def create_player_table(conn):
@@ -112,8 +115,8 @@ def create_player_table(conn):
                 update_sql = f'UPDATE player SET Club = %s WHERE playerID = %s'
                 cursor.execute(update_sql, (club, values[1]))
 
-                # wait for 3 seconds to avoid being blocked
-                time.sleep(3)
+                # wait for 2 seconds to avoid being blocked
+                time.sleep(2)
 
                 continue
         conn.commit()
@@ -121,7 +124,137 @@ def create_player_table(conn):
     print('-----------------\nImported into player\n-----------------')
 
 
-def create_database(conn, gw, flush=False):
+def create_player_stats_table(conn, cols):
+
+    # create table with all the same columns as player_game table, but with playerID as foreign key from player table and without the gameweek and player columns
+    with conn.cursor() as cursor:
+        # create table with all the same columns as player_game table, but with playerID as foreign key from player table and without the columns gw, Player, Nation, Club, Num, Pos, Age
+
+        # check if the table exists, return Boolean
+        exists = cursor.execute("""
+            SELECT COUNT(*) INTO @table_count
+            FROM information_schema.tables
+            WHERE table_schema = 'fantasy'
+            AND table_name = 'player_stats';
+        """)
+        if exists:
+            return
+
+        # Drop table if it exists
+        cursor.execute(
+            'CREATE TABLE IF NOT EXISTS player_stats LIKE player_game;')
+
+        # Check if columns exist
+        cursor.execute("""
+            SELECT COUNT(*) INTO @column_count
+            FROM information_schema.columns
+            WHERE table_schema = 'fantasy'
+            AND table_name = 'player_stats'
+            AND column_name IN ('Player', 'gw', 'Nation', 'Club', 'Num', 'Pos', 'Age');
+        """)
+
+        # Drop columns if they exist
+        cursor.execute("""
+            SET @drop_statement = IF(@column_count > 0,
+                'ALTER TABLE player_stats
+                DROP COLUMN Player,
+                DROP COLUMN gw,
+                DROP COLUMN Nation,
+                DROP COLUMN Club,
+                DROP COLUMN Num,
+                DROP COLUMN Pos,
+                DROP COLUMN Age;',
+                'SELECT "Columns do not exist.";'
+            );
+        """)
+
+        cursor.execute("PREPARE stmt FROM @drop_statement;")
+        cursor.execute("EXECUTE stmt;")
+        cursor.execute("DEALLOCATE PREPARE stmt;")
+
+        # check if foreign key exists, add it if it doesn't
+        cursor.execute("""
+            SELECT COUNT(*) INTO @fk_count
+            FROM information_schema.TABLE_CONSTRAINTS
+            WHERE CONSTRAINT_SCHEMA = 'fantasy'
+            AND CONSTRAINT_NAME = 'player_stats_fk';
+        """)
+        cursor.execute("""
+            SET @fk_statement = IF(@fk_count = 0,
+                'ALTER TABLE player_stats
+                ADD CONSTRAINT player_stats_fk FOREIGN KEY (playerID) REFERENCES player(playerID);',
+                'SELECT "Foreign key already exists.";'
+            );
+        """)
+
+        # Define the column names for summing and averaging
+        non_cols = ['Player', 'gw', 'Nation',
+                    'Club', 'Num', 'Pos', 'Age', 'playerID']
+        sum_cols = [col for col in cols if col not in non_cols and 'pct' not in col.lower(
+        ) and 'avg' not in col.lower()]
+        avg_cols = [col for col in cols if col not in non_cols and (
+            'pct' in col.lower() or 'avg' in col.lower())]
+
+        # procedure for checking if players are in player_stats, adding if not
+        player_procedure = """
+        CREATE PROCEDURE IF NOT EXISTS insert_player_stats (playerIDVar varchar(255))
+        BEGIN
+            -- Check if playerID exists in player_stats table
+            IF NOT EXISTS (SELECT 1 FROM player_stats WHERE playerID = playerIDVar) THEN
+                -- playerID does not exist, insert it into player_stats table
+                INSERT INTO player_stats (playerID) VALUES (playerIDVar);
+            END IF;
+        END;
+        """
+        cursor.execute(player_procedure)
+
+        # Define the trigger codes with placeholders for the column names
+        ins_trigger_code = """
+        CREATE TRIGGER IF NOT EXISTS update_player_stats_onIns AFTER INSERT ON player_game
+        FOR EACH ROW
+        BEGIN
+            CALL insert_player_stats(NEW.playerID);
+
+            UPDATE player_stats
+            SET {sum_cols}
+            WHERE playerID = NEW.playerID;
+
+            UPDATE player_stats
+            SET {avg_cols}
+            WHERE playerID = NEW.playerID;
+        END;
+        """
+
+        del_trigger_code = ins_trigger_code.replace(
+            'INSERT', 'DELETE').replace('onIns', 'onDel').replace('NEW', 'OLD')
+        upd_trigger_code = ins_trigger_code.replace(
+            'INSERT', 'UPDATE').replace('onIns', 'onUpd')
+        triggers = [ins_trigger_code, del_trigger_code, upd_trigger_code]
+
+        # Format the column names for summing
+        sum_cols_str = ', '.join(
+            f"{col} = {col} + NEW.{col}" for col in sum_cols)
+
+        # Format the column names for averaging
+        avg_cols_str = ', '.join(f"{col} = (\
+                SELECT AVG({col}) FROM player_game WHERE playerID = NEW.playerID\
+            )" for col in avg_cols)
+
+        # Format the trigger codes with the column names
+        for trigger in triggers:
+            cursor.execute(trigger.split(' AFTER ')[0].replace(
+                'CREATE TRIGGER', 'DROP TRIGGER IF EXISTS') + ';')
+            if 'AFTER DELETE ON' in trigger:
+                trigger_code = trigger.format(
+                    sum_cols=sum_cols_str.replace('NEW', 'OLD'), avg_cols=avg_cols_str.replace('NEW', 'OLD'))
+            else:
+                trigger_code = trigger.format(
+                    sum_cols=sum_cols_str, avg_cols=avg_cols_str)
+            cursor.execute(trigger_code)
+    conn.commit()
+
+
+def create_database(conn, gws, flush=False, players=False):
 
     # delete and recreate database
     if flush:
@@ -140,32 +273,15 @@ def create_database(conn, gw, flush=False):
             cursor.execute('USE fantasy;')
         conn.commit()
 
-    # create player_game table and player table
-    create_player_table(conn)
-    create_player_game_table(conn, gw)
+        # create player_game table and player table
+        create_player_table(conn)
 
-    # create table for players' aggregated stats with foreign key of player_id from player table
+    if players:
+        create_player_table(conn)
+
+    for gw in gws:
+        create_player_game_table(conn, gw)
 
 
 if __name__ == '__main__':
-    create_database(mysqlconnect(), 9, flush=True)
-
-
-"""
-
-# avg stats: _______
-# sum stats: _______
-
-create procedure to update player table by summing stats from player_game table
-
-create procedure update_player_table(playerID varchar(255))
-begin
-    # 
-    
-
-
-    
-
-
-
-"""
+    create_database(mysqlconnect(), [1, 2], flush=True)
