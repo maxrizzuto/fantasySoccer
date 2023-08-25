@@ -6,8 +6,22 @@ import pandas as pd
 from scraping import get_match_data, get_player_data
 
 HOME_URL = 'https://fbref.com/'
-PL_URLS = {'matches': 'https://fbref.com/en/comps/9/schedule/Premier-League-Scores-and-Fixtures',
-           'players': 'https://fbref.com/en/comps/9/Premier-League-Stats'}
+PL_URLS = {
+    'matches': 'https://fbref.com/en/comps/9/schedule/Premier-League-Scores-and-Fixtures',
+    'players': 'https://fbref.com/en/comps/9/Premier-League-Stats'}
+LALIGA_URLS = {
+    'matches': 'https://fbref.com/en/comps/12/schedule/La-Liga-Scores-and-Fixtures',
+    'players': 'https://fbref.com/en/comps/12/La-Liga-Stats'}
+SERIEA_URLS = {
+    'matches': 'https://fbref.com/en/comps/11/schedule/Serie-A-Scores-and-Fixtures',
+    'players': 'https://fbref.com/en/comps/11/Serie-A-Stats'}
+BUNDESLIGA_URLS = {
+    'matches': 'https://fbref.com/en/comps/20/schedule/Bundesliga-Scores-and-Fixtures',
+    'players': 'https://fbref.com/en/comps/20/Bundesliga-Stats'}
+LIGUE1_URLS = {
+    'matches': 'https://fbref.com/en/comps/13/schedule/Ligue-1-Scores-and-Fixtures',
+    'players': 'https://fbref.com/en/comps/13/Ligue-1-Stats'}
+URLS = [PL_URLS, LALIGA_URLS, SERIEA_URLS, BUNDESLIGA_URLS, LIGUE1_URLS]
 
 
 def mysqlconnect():
@@ -48,7 +62,7 @@ def create_player_game_table(conn, gw):
     match_cols = sql_cols(match_df)
     with conn.cursor() as cursor:
         player_game = 'CREATE TABLE IF NOT EXISTS player_game ({}'.format(
-            ', '.join([' '.join(x) for x in match_cols])) + ', PRIMARY KEY (playerID), CONSTRAINT player_game_fk FOREIGN KEY (playerID) REFERENCES player(playerID));'
+            ' DEFAULT 0, '.join([' '.join(x) for x in match_cols])) + ', PRIMARY KEY (playerID, gw), CONSTRAINT player_game_fk FOREIGN KEY (playerID) REFERENCES player(playerID));'
         cursor.execute(player_game)
     conn.commit()
 
@@ -115,13 +129,13 @@ def create_player_table(conn):
                 update_sql = f'UPDATE player SET Club = %s WHERE playerID = %s'
                 cursor.execute(update_sql, (club, values[1]))
 
-                # wait for 2 seconds to avoid being blocked
-                time.sleep(2)
+                # wait for 4 seconds to avoid being blocked
+                time.sleep(4)
 
                 continue
         conn.commit()
 
-    print('-----------------\nImported into player\n-----------------')
+    print('Imported into player\n-----------------\n\n')
 
 
 def create_player_stats_table(conn, cols):
@@ -129,17 +143,6 @@ def create_player_stats_table(conn, cols):
     # create table with all the same columns as player_game table, but with playerID as foreign key from player table and without the gameweek and player columns
     with conn.cursor() as cursor:
         # create table with all the same columns as player_game table, but with playerID as foreign key from player table and without the columns gw, Player, Nation, Club, Num, Pos, Age
-
-        # check if the table exists, return Boolean
-        exists = cursor.execute("""
-            SELECT COUNT(*) INTO @table_count
-            FROM information_schema.tables
-            WHERE table_schema = 'fantasy'
-            AND table_name = 'player_stats';
-        """)
-        if exists:
-            return
-
         # Drop table if it exists
         cursor.execute(
             'CREATE TABLE IF NOT EXISTS player_stats LIKE player_game;')
@@ -237,13 +240,12 @@ def create_player_stats_table(conn, cols):
 
         # Format the column names for averaging
         avg_cols_str = ', '.join(f"{col} = (\
-                SELECT AVG({col}) FROM player_game WHERE playerID = NEW.playerID\
-            )" for col in avg_cols)
+                SELECT AVG({col}) FROM player_game WHERE playerID = NEW.playerID)" for col in avg_cols)
 
         # Format the trigger codes with the column names
         for trigger in triggers:
-            cursor.execute(trigger.split(' AFTER ')[0].replace(
-                'CREATE TRIGGER', 'DROP TRIGGER IF EXISTS') + ';')
+            trigger_code = trigger.split(' AFTER ')[0].replace(
+                'CREATE TRIGGER', 'DROP TRIGGER IF EXISTS') + ';'
             if 'AFTER DELETE ON' in trigger:
                 trigger_code = trigger.format(
                     sum_cols=sum_cols_str.replace('NEW', 'OLD'), avg_cols=avg_cols_str.replace('NEW', 'OLD'))

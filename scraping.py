@@ -3,10 +3,26 @@ import numpy as np
 import requests
 from bs4 import BeautifulSoup as bs
 import time
+from urllib.request import urlopen
+from lxml import etree
 
 HOME_URL = 'https://fbref.com/'
-PL_URLS = {'matches': 'https://fbref.com/en/comps/9/schedule/Premier-League-Scores-and-Fixtures',
-           'players': 'https://fbref.com/en/comps/9/Premier-League-Stats'}
+PL_URLS = {
+    'matches': 'https://fbref.com/en/comps/9/schedule/Premier-League-Scores-and-Fixtures',
+    'players': 'https://fbref.com/en/comps/9/Premier-League-Stats'}
+LALIGA_URLS = {
+    'matches': 'https://fbref.com/en/comps/12/schedule/La-Liga-Scores-and-Fixtures',
+    'players': 'https://fbref.com/en/comps/12/La-Liga-Stats'}
+SERIEA_URLS = {
+    'matches': 'https://fbref.com/en/comps/11/schedule/Serie-A-Scores-and-Fixtures',
+    'players': 'https://fbref.com/en/comps/11/Serie-A-Stats'}
+BUNDESLIGA_URLS = {
+    'matches': 'https://fbref.com/en/comps/20/schedule/Bundesliga-Scores-and-Fixtures',
+    'players': 'https://fbref.com/en/comps/20/Bundesliga-Stats'}
+LIGUE1_URLS = {
+    'matches': 'https://fbref.com/en/comps/13/schedule/Ligue-1-Scores-and-Fixtures',
+    'players': 'https://fbref.com/en/comps/13/Ligue-1-Stats'}
+URLS = [PL_URLS, LALIGA_URLS, SERIEA_URLS, BUNDESLIGA_URLS, LIGUE1_URLS]
 
 
 def get_dataframe(url, gw=None):
@@ -42,7 +58,50 @@ def clean_columns(df):
     # if second value in player tuple is none remove the row from the dataframe
     df = df[df['Player'].map(lambda x: x[1] is not None)]
 
-    # extract player id from player column
+    # get url for each player and scrape their page to get actual position
+    if 'Pos' in df.columns:
+        player_urls = df['Player'].map(lambda x: HOME_URL[:-1] + x[1])
+        positions = list()
+
+        # scrape each player's page
+        for url in player_urls:
+            time.sleep(4)
+            response = urlopen(url)
+            htmlparser = etree.HTMLParser()
+            tree = etree.parse(response, htmlparser)
+
+            # get their specific position if they have a scout report
+            try:
+                pos = tree.xpath('//div[@id="all_similar"]/div[@class="filter switcher"]/div/a')[0].text[:-1]
+            except IndexError:
+                # if they don't have a scout report, get their general position
+                pos = tree.xpath('//div[@id="meta"]//p/strong[text()="Position:"]/../text()')[0].strip()
+                if '(' in pos:
+                    pos = pos.split('(')[-1].split(')')[0]
+                    if '-' in pos:
+                        pos = pos.split('-')[0]
+                else:
+                    pos = pos[:2]
+                
+            
+            # use player id to get position from df
+            # player_id = url.split('/')[-2]
+            # pos = df[df['playerID'] == player_id]['Pos'].values[0]
+
+            # add position to list and dataframe
+            positions.append(pos)
+        df['Pos'] = positions
+
+        # drop rows with empty position
+        df = df.dropna(subset=['Pos'])
+        print(df)
+        print(df['Pos'])
+        df['Pos'] = df['Pos'].map(lambda x: x.split(',')[0])
+        print('UPDATED')
+        print(df)
+        print(df['Pos'])
+
+         # extract player id from player column
     if isinstance(df['Player'].iloc[0], tuple):
         df['playerID'] = df['Player'].map(lambda x: x[1].split('/')[-2])
         df['Player'] = df['Player'].map(lambda x: x[0])
@@ -61,12 +120,6 @@ def clean_columns(df):
         df = df.dropna(subset=['Nation'])
         df['Nation'] = df['Nation'].map(lambda x: x.split(' ')[-1])
 
-    # take first position from Pos column
-    if 'Pos' in df.columns:
-        # drop rows with empty position
-        df = df.dropna(subset=['Pos'])
-        df['Pos'] = df['Pos'].map(lambda x: x.split(',')[0])
-
     # take first value from Age column
     if 'Age' in df.columns:
         # drop rows with empty age
@@ -84,7 +137,6 @@ def get_match_data(url, gw, export=False):
     # drop postponed matches or matches with no score listed
     df.Score.replace('', np.nan, inplace=True)
     df.dropna(subset=['Score'], inplace=True)
-    print(df)
 
     # get link from each match in dataframe
     matches = [f'https://fbref.com{x}' for x in df.Score.map(lambda x: x[1])]
@@ -150,8 +202,8 @@ def get_match_data(url, gw, export=False):
         gw_df = pd.concat([gw_df, match_df], ignore_index=True)
         print('Done.\n--------------------------')
 
-        # sleep for 7 seconds to avoid getting blocked
-        time.sleep(7)
+        # sleep for 4 seconds to avoid getting blocked
+        time.sleep(4)
 
     # convert to numeric values
     gw_df = gw_df.apply(pd.to_numeric, errors='ignore')
@@ -172,12 +224,13 @@ def get_match_data(url, gw, export=False):
 
     # export if specified
     if export:
-        gw_df.to_csv(f'data/match_data/gw{gw}.csv', index=False)
+        league = url.split('/')[-1].replace('-Scores-and-Fixtures', '')
+        gw_df.to_csv(f'data/match_data/{league}_gw{gw}.csv', index=False)
 
     return gw_df
 
 
-def get_player_data(url):
+def get_player_data(url, export=False):
     """Scrape permanent data for each player's profile"""
 
     # get url for each team
@@ -195,9 +248,6 @@ def get_player_data(url):
         df.columns = [x[-1][0] for x in df.columns]
         df = df.T.groupby(level=0).first().T
         df['Club'] = team_name
-
-        # get player_id column
-        df = clean_columns(df)
 
         # move player, nation, pos, age, mp, starts, and mins to first columns
         cols = ['Player', 'playerID', 'Club', 'Nation',
@@ -224,15 +274,21 @@ def get_player_data(url):
         # add df to player_df
         player_df = pd.concat([player_df, df], ignore_index=True)
 
-        # sleep for 7 seconds to avoid getting blocked
-        time.sleep(7)
+        # sleep for 4 seconds to avoid getting blocked
+        time.sleep(4)
 
     # change all columns in dataframe to numeric where possible
     player_df = player_df.apply(pd.to_numeric, errors='ignore')
+
+    if export:
+        league = url.split('/')[-1].replace('-Stats', '')
+        player_df.to_csv(f'data/player_data/{league}_player_data.csv', index=False)
 
     return player_df
 
 
 if __name__ == '__main__':
-    # get_player_data(PL_URLS['players'])
-    get_match_data(PL_URLS['matches'], 1, export=True)
+    for league in URLS:
+        get_player_data(league['players'], export=True)
+        for gw in range(1, 2):
+            get_match_data(league['matches'], gw, export=True)
