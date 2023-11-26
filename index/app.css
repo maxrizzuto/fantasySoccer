@@ -1,0 +1,4 @@
+/* display li tags with the class "header-nav-bar" inline */
+li.header-nav-bar {
+  display: inline;
+}
