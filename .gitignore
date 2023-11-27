@@ -1,3 +1,6 @@
+# remove credentials json
+credentials.json
+
 # remove sql config file from git
 *.config
 

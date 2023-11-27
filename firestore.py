@@ -79,7 +79,7 @@ def insert_matches_data(gw_map):
                 api_call(gw_ref.set, {})
 
             # insert matches
-            matches_data.apply(lambda match: api_call(gw_ref.add, {match['id']: {key: value for key, value in match.items() if key not in ['playerid', 'matchid', 'club', 'gw']}}), axis=1)
+            matches_data.apply(lambda match: api_call(gw_ref.set, {match['id']: {key: value for key, value in match.items() if key not in ['playerid', 'matchid', 'club', 'gw']}}), axis=1)
    
             # insert player matches
             player_matches_data.apply(
